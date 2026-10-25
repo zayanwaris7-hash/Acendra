@@ -26,6 +26,7 @@ import { MessagesModule } from './messages/messages.module.js';
 import { GatewayModule } from './gateway/gateway.module.js';
 import { OtpModule } from './otp/otp.module.js';
 import { RedisModule } from './redis/redis.module.js';
+import { MailModule } from './mail/mail.module.js';
 
 @Module({
   imports: [
@@ -55,6 +56,7 @@ import { RedisModule } from './redis/redis.module.js';
     GatewayModule,
     OtpModule,
     RedisModule,
+    MailModule,
   ],
 
   controllers: [AppController],
@@ -66,6 +68,7 @@ export class AppModule implements OnApplicationBootstrap {
   constructor(private readonly dataSource: DataSource) {}
 
   onApplicationBootstrap() {
+    
     if (this.dataSource.isInitialized) {
       this.logger.log(
         '✅ Neon PostgreSQL connected successfully!',
