@@ -24,6 +24,8 @@ import { UsersModule } from './users/users.module.js';
 import { ChatsModule } from './chats/chats.module.js';
 import { MessagesModule } from './messages/messages.module.js';
 import { GatewayModule } from './gateway/gateway.module.js';
+import { OtpModule } from './otp/otp.module.js';
+import { RedisModule } from './redis/redis.module.js';
 
 @Module({
   imports: [
@@ -51,6 +53,8 @@ import { GatewayModule } from './gateway/gateway.module.js';
     ChatsModule,
     MessagesModule,
     GatewayModule,
+    OtpModule,
+    RedisModule,
   ],
 
   controllers: [AppController],

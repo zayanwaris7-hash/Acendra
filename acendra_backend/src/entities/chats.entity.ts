@@ -21,8 +21,16 @@ export enum MessageType {
 }
 
 @Entity('messages')
-@Index(['senderId', 'receiverId', 'createdAt'])
-@Index(['receiverId', 'senderId', 'createdAt'])
+@Index('IDX_messages_sender_receiver_created', [
+  'senderId',
+  'receiverId',
+  'createdAt',
+])
+@Index('IDX_messages_receiver_sender_created', [
+  'receiverId',
+  'senderId',
+  'createdAt',
+])
 export class Message {
   @PrimaryGeneratedColumn('uuid')
   id: string;
