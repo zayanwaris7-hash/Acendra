@@ -27,6 +27,7 @@ import { GatewayModule } from './gateway/gateway.module.js';
 import { OtpModule } from './otp/otp.module.js';
 import { RedisModule } from './redis/redis.module.js';
 import { MailModule } from './mail/mail.module.js';
+import { CloudinaryModule } from './cloudinary/cloudinary.module.js';
 
 @Module({
   imports: [
@@ -57,6 +58,7 @@ import { MailModule } from './mail/mail.module.js';
     OtpModule,
     RedisModule,
     MailModule,
+    CloudinaryModule,
   ],
 
   controllers: [AppController],

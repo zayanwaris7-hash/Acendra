@@ -69,6 +69,26 @@ export class Message {
   @Column({ type: 'varchar', length: 255, nullable: true })
   attachmentName: string | null;
 
+  @Column({
+    type: 'varchar',
+    length: 500,
+    nullable: true,
+  })
+  attachmentPublicId: string | null;
+
+  @Column({
+    type: 'varchar',
+    length: 20,
+    nullable: true,
+  })
+  attachmentResourceType: string | null;
+
+  @Column({
+    type: 'bigint',
+    nullable: true,
+  })
+  attachmentSizeBytes: string | null;
+
   @Column({ type: 'boolean', default: false })
   isRead: boolean;
 
