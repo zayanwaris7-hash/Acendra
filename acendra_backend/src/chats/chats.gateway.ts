@@ -36,7 +36,9 @@ interface AuthenticatedSocket extends Socket {
 @WebSocketGateway({
   namespace: '/chats',
   cors: {
-    origin: (process.env.FRONTEND_URL ?? 'http://localhost:3000')
+    origin: (
+      process.env.FRONTEND_URL ?? 'http://localhost:3000'
+    )
       .split(',')
       .map((origin) => origin.trim()),
     credentials: true,
@@ -57,46 +59,76 @@ export class ChatsGateway
   ) {}
 
   async handleConnection(client: AuthenticatedSocket) {
+    this.logger.log(
+      `[CONNECTING] socketId=${client.id} namespace=${client.nsp.name}`,
+    );
+
     try {
       const token =
         client.handshake.auth?.token ??
-        client.handshake.headers.authorization?.replace(/^Bearer\s+/i, '');
+        client.handshake.headers.authorization?.replace(
+          /^Bearer\s+/i,
+          '',
+        );
 
       if (!token || typeof token !== 'string') {
+        this.logger.warn(
+          `[AUTH FAILED] socketId=${client.id} reason=Missing token`,
+        );
+
         client.disconnect(true);
         return;
       }
 
-      const payload = await this.jwtService.verifyAsync<SocketUser>(
-        token,
-        {
-          secret: this.configService.getOrThrow<string>(
-            'JWT_ACCESS_SECRET',
-          ),
-        },
+      this.logger.debug(
+        `[AUTH] Verifying JWT for socketId=${client.id}`,
       );
+
+      const payload =
+        await this.jwtService.verifyAsync<SocketUser>(
+          token,
+          {
+            secret: this.configService.getOrThrow<string>(
+              'JWT_ACCESS_SECRET',
+            ),
+          },
+        );
 
       const userId = payload.sub ?? payload.id;
 
       if (!userId) {
+        this.logger.warn(
+          `[AUTH FAILED] socketId=${client.id} reason=Missing user ID in JWT`,
+        );
+
         client.disconnect(true);
         return;
       }
 
       client.data.userId = userId;
 
-      // Each user gets a private room for notifications.
-      await client.join(this.getUserRoom(userId));
+      const userRoom = this.getUserRoom(userId);
+      await client.join(userRoom);
 
-      this.logger.log(`Authenticated socket for user ${userId}`);
-    } catch {
+      this.logger.log(
+        `[AUTH SUCCESS] socketId=${client.id} userId=${userId} room=${userRoom}`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `[AUTH ERROR] socketId=${client.id} ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
+      );
+
       client.disconnect(true);
     }
   }
 
   handleDisconnect(client: AuthenticatedSocket) {
-    this.logger.debug(
-      `Socket disconnected for user ${client.data.userId ?? 'unknown'}`,
+    this.logger.log(
+      `[DISCONNECTED] socketId=${client.id} userId=${
+        client.data.userId ?? 'unknown'
+      }`,
     );
   }
 
@@ -112,6 +144,10 @@ export class ChatsGateway
     const userId = client.data.userId;
 
     if (!userId) {
+      this.logger.warn(
+        `[UNAUTHENTICATED EVENT] socketId=${client.id}`,
+      );
+
       throw new Error('Socket is not authenticated.');
     }
 
@@ -127,23 +163,37 @@ export class ChatsGateway
         ? error.message
         : 'An unexpected chat error occurred.';
 
+    this.logger.error(
+      `[EVENT ERROR] socketId=${client.id} userId=${
+        client.data.userId ?? 'unknown'
+      } message=${message}`,
+    );
+
     client.emit('chat:error', { message });
   }
 
   /**
-   * Join a conversation only after checking membership.
+   * Join a conversation after checking membership and acceptance.
    */
   @SubscribeMessage('chat:join')
   async joinConversation(
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() payload: { conversationId: string },
   ) {
+    this.logger.log(
+      `[EVENT RECEIVED] chat:join socketId=${client.id}`,
+    );
+
     try {
       const userId = this.getUserId(client);
 
       if (!payload?.conversationId) {
         throw new Error('conversationId is required.');
       }
+
+      this.logger.debug(
+        `[CHAT JOIN] userId=${userId} conversationId=${payload.conversationId}`,
+      );
 
       const conversation =
         await this.chatsService.assertConversationMember(
@@ -156,8 +206,11 @@ export class ChatsGateway
         conversation.userTwoId,
       );
 
-      await client.join(
-        this.getConversationRoom(conversation.id),
+      const room = this.getConversationRoom(conversation.id);
+      await client.join(room);
+
+      this.logger.log(
+        `[CHAT JOIN SUCCESS] userId=${userId} conversationId=${conversation.id} room=${room}`,
       );
 
       return {
@@ -182,7 +235,7 @@ export class ChatsGateway
   }
 
   /**
-   * Receive and persist a text message, then broadcast it.
+   * Save a text message and notify both users.
    */
   @UsePipes(
     new ValidationPipe({
@@ -196,8 +249,16 @@ export class ChatsGateway
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() payload: SendMessageDto,
   ) {
+    this.logger.log(
+      `[EVENT RECEIVED] chat:message:send socketId=${client.id}`,
+    );
+
     try {
       const senderId = this.getUserId(client);
+
+      this.logger.log(
+        `[MESSAGE SENDING] senderId=${senderId} receiverId=${payload.receiverId}`,
+      );
 
       const message = await this.chatsService.sendTextMessage(
         senderId,
@@ -216,14 +277,25 @@ export class ChatsGateway
         message,
       };
 
-      // Deliver to all active connections belonging to both users.
+      this.logger.log(
+        `[MESSAGE SAVED] messageId=${message.id} conversationId=${conversation.id}`,
+      );
+
       this.server
         .to(this.getUserRoom(senderId))
         .emit('chat:message:new', eventData);
 
+      this.logger.debug(
+        `[MESSAGE EMITTED] event=chat:message:new recipient=${senderId}`,
+      );
+
       this.server
         .to(this.getUserRoom(payload.receiverId))
         .emit('chat:message:new', eventData);
+
+      this.logger.log(
+        `[MESSAGE DELIVERED TO ROOMS] senderId=${senderId} receiverId=${payload.receiverId}`,
+      );
 
       return {
         event: 'chat:message:sent',
@@ -245,7 +317,7 @@ export class ChatsGateway
   }
 
   /**
-   * Notify the other user when someone starts or stops typing.
+   * Notify the recipient about typing status.
    */
   @SubscribeMessage('chat:typing')
   async typing(
@@ -256,6 +328,10 @@ export class ChatsGateway
       isTyping: boolean;
     },
   ) {
+    this.logger.debug(
+      `[EVENT RECEIVED] chat:typing socketId=${client.id}`,
+    );
+
     try {
       const senderId = this.getUserId(client);
 
@@ -270,13 +346,19 @@ export class ChatsGateway
         payload.receiverId,
       );
 
+      const eventData = {
+        conversationId: conversation.id,
+        userId: senderId,
+        isTyping: Boolean(payload.isTyping),
+      };
+
       this.server
         .to(this.getUserRoom(payload.receiverId))
-        .emit('chat:typing', {
-          conversationId: conversation.id,
-          userId: senderId,
-          isTyping: Boolean(payload.isTyping),
-        });
+        .emit('chat:typing', eventData);
+
+      this.logger.log(
+        `[TYPING EMITTED] senderId=${senderId} receiverId=${payload.receiverId} isTyping=${eventData.isTyping}`,
+      );
 
       return { success: true };
     } catch (error) {
@@ -286,29 +368,43 @@ export class ChatsGateway
   }
 
   /**
-   * Mark messages from the other user as read and notify them.
+   * Mark received messages as read and notify the sender.
    */
   @SubscribeMessage('chat:messages:read')
   async markRead(
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() payload: { senderId: string },
   ) {
+    this.logger.log(
+      `[EVENT RECEIVED] chat:messages:read socketId=${client.id}`,
+    );
+
     try {
       const readerId = this.getUserId(client);
+
+      this.logger.debug(
+        `[READ RECEIPT] readerId=${readerId} senderId=${payload.senderId}`,
+      );
 
       const result = await this.chatsService.markMessagesAsRead(
         readerId,
         payload.senderId,
       );
 
+      const eventData = {
+        readerId,
+        senderId: payload.senderId,
+        affected: result.affected,
+        readAt: new Date().toISOString(),
+      };
+
       this.server
         .to(this.getUserRoom(payload.senderId))
-        .emit('chat:messages:read', {
-          readerId,
-          senderId: payload.senderId,
-          affected: result.affected,
-          readAt: new Date().toISOString(),
-        });
+        .emit('chat:messages:read', eventData);
+
+      this.logger.log(
+        `[READ RECEIPT EMITTED] readerId=${readerId} senderId=${payload.senderId} affected=${result.affected ?? 0}`,
+      );
 
       return {
         success: true,
@@ -321,7 +417,7 @@ export class ChatsGateway
   }
 
   /**
-   * Called by REST controllers after they save an attachment message.
+   * Emit a newly saved attachment message.
    */
   emitNewMessage(
     conversationId: string,
@@ -334,6 +430,10 @@ export class ChatsGateway
       message,
     };
 
+    this.logger.log(
+      `[ATTACHMENT MESSAGE EMIT] conversationId=${conversationId} senderId=${senderId} receiverId=${receiverId}`,
+    );
+
     this.server
       .to(this.getUserRoom(senderId))
       .emit('chat:message:new', eventData);
@@ -344,13 +444,17 @@ export class ChatsGateway
   }
 
   /**
-   * Notify users about chat-request changes.
+   * Emit chat-request notifications.
    */
   emitChatRequest(
     receiverId: string,
     event: 'chat:request:new' | 'chat:request:updated',
     data: unknown,
   ) {
+    this.logger.log(
+      `[CHAT REQUEST EMIT] event=${event} receiverId=${receiverId}`,
+    );
+
     this.server
       .to(this.getUserRoom(receiverId))
       .emit(event, data);

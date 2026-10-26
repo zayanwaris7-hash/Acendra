@@ -2,26 +2,27 @@ import {
   BadRequestException,
   Injectable,
   InternalServerErrorException,
+  Logger,
 } from '@nestjs/common';
 
 import { InjectRepository } from '@nestjs/typeorm';
-
 import { Repository } from 'typeorm';
 
 import { randomUUID } from 'node:crypto';
 import { extname } from 'node:path';
 
-
-
-
+import { ChatsGateway } from './chats.gateway.js';
 import { ChatsService } from './chats.service.js';
-
-// Adjust this import to your actual Cloudinary service location.
 import { CloudinaryService } from '../cloudinary/cloudinary.service.js';
-import { Message, MessageType } from '../entities/chats.entity.js';
+
+import {
+  Message,
+  MessageType,
+} from '../entities/chats.entity.js';
+
 import { Conversation } from '../entities/conversation.entity.js';
 
-const MAX_FILE_SIZE = 10 * 1024 * 1024;
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 
 const ALLOWED_EXTENSIONS = new Set([
   '.pdf',
@@ -39,6 +40,10 @@ const ALLOWED_MIME_TYPES = new Set([
 
 @Injectable()
 export class ChatsAttachmentsService {
+  private readonly logger = new Logger(
+    ChatsAttachmentsService.name,
+  );
+
   constructor(
     @InjectRepository(Message)
     private readonly messageRepository: Repository<Message>,
@@ -49,6 +54,8 @@ export class ChatsAttachmentsService {
     private readonly chatsService: ChatsService,
 
     private readonly cloudinaryService: CloudinaryService,
+
+    private readonly chatsGateway: ChatsGateway,
   ) {}
 
   /**
@@ -59,6 +66,7 @@ export class ChatsAttachmentsService {
     receiverId: string,
     file: Express.Multer.File,
   ) {
+    // 1. Validate the uploaded file.
     if (!file) {
       throw new BadRequestException(
         'Please select a document.',
@@ -93,7 +101,7 @@ export class ChatsAttachmentsService {
       );
     }
 
-    // Verify conversation membership and accepted chat status.
+    // 2. Verify that the users have an authorized conversation.
     const conversation =
       await this.chatsService.getAuthorizedConversation(
         senderId,
@@ -105,8 +113,8 @@ export class ChatsAttachmentsService {
       receiverId,
     );
 
-    // Generate an unpredictable asset ID.
-    const publicId = `${randomUUID()}${extension}`;
+    // 3. Upload the document to Cloudinary.
+    const publicId = randomUUID();
 
     const uploaded =
       await this.cloudinaryService.uploadBuffer(
@@ -120,6 +128,7 @@ export class ChatsAttachmentsService {
       );
 
     try {
+      // 4. Create the attachment message in the database.
       const attachmentMessage =
         this.messageRepository.create({
           senderId,
@@ -140,6 +149,7 @@ export class ChatsAttachmentsService {
           attachmentMessage,
         );
 
+      // 5. Update the conversation's latest message time.
       conversation.lastMessageAt =
         savedMessage.createdAt;
 
@@ -147,23 +157,56 @@ export class ChatsAttachmentsService {
         conversation,
       );
 
+      // 6. Notify both users in real time.
+      // ChatsGateway.emitNewMessage should emit to:
+      // user:${senderId} and user:${receiverId}.
+      this.chatsGateway.emitNewMessage(
+        conversation.id,
+        senderId,
+        receiverId,
+        savedMessage,
+      );
+
+      this.logger.log(
+        `Document message saved for conversation ${conversation.id}`,
+      );
+
+      // 7. Return the saved message to the HTTP caller.
       return {
+        message: 'Document sent successfully.',
         conversationId: conversation.id,
-        message: savedMessage,
+        data: savedMessage,
       };
-    } catch {
-      // Clean up the uploaded asset if saving the message fails.
+    } catch (error) {
+      // Remove the uploaded asset if database persistence fails.
       try {
         await this.cloudinaryService.deleteAsset(
           uploaded.publicId,
           'raw',
         );
-      } catch {
-        // Log cleanup failures in production.
+      } catch (cleanupError) {
+        this.logger.error(
+          `Failed to clean up uploaded document ${uploaded.publicId}`,
+          cleanupError instanceof Error
+            ? cleanupError.stack
+            : undefined,
+        );
       }
 
+      // Preserve NestJS HTTP exceptions if one was thrown.
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+
+      this.logger.error(
+        'Failed to save the document chat message.',
+        error instanceof Error
+          ? error.stack
+          : undefined,
+      );
+
       throw new InternalServerErrorException(
-        'Document uploaded, but the chat message could not be saved.',
+        'The document was uploaded, but the chat message could not be saved.',
       );
     }
   }
