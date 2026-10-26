@@ -9,10 +9,8 @@ import {
   ConfigService,
 } from '@nestjs/config';
 
-import {
-  TypeOrmModule,
-} from '@nestjs/typeorm';
-
+import { ScheduleModule } from '@nestjs/schedule';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import typeormConfig from './config/typeorm.config.js';
@@ -28,6 +26,7 @@ import { OtpModule } from './otp/otp.module.js';
 import { RedisModule } from './redis/redis.module.js';
 import { MailModule } from './mail/mail.module.js';
 import { CloudinaryModule } from './cloudinary/cloudinary.module.js';
+import { HealthModule } from './health/health.module.js';
 
 @Module({
   imports: [
@@ -35,6 +34,9 @@ import { CloudinaryModule } from './cloudinary/cloudinary.module.js';
       isGlobal: true,
       load: [typeormConfig],
     }),
+
+    // Enable NestJS cron jobs
+    ScheduleModule.forRoot(),
 
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
@@ -59,9 +61,11 @@ import { CloudinaryModule } from './cloudinary/cloudinary.module.js';
     RedisModule,
     MailModule,
     CloudinaryModule,
+    HealthModule,
   ],
 
   controllers: [AppController],
+
   providers: [AppService],
 })
 export class AppModule implements OnApplicationBootstrap {
@@ -70,24 +74,23 @@ export class AppModule implements OnApplicationBootstrap {
   constructor(private readonly dataSource: DataSource) {}
 
   onApplicationBootstrap() {
-    
     if (this.dataSource.isInitialized) {
       this.logger.log(
-        '✅ Neon PostgreSQL connected successfully!',
+        'Neon PostgreSQL connected successfully!',
       );
 
       this.logger.log(
-        `📦 Database: ${this.dataSource.options.type}`,
+        `Database: ${this.dataSource.options.type}`,
       );
 
       this.logger.log(
-        `📊 Schema synchronization: ${
+        `Schema synchronization: ${
           this.dataSource.options.synchronize ?? false
         }`,
       );
     } else {
       this.logger.error(
-        '❌ Database connection is not initialized.',
+        'Database connection is not initialized.',
       );
     }
   }
