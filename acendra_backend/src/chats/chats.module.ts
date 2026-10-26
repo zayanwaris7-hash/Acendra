@@ -14,13 +14,12 @@ import { ChatsRequestsService } from './chats-requests.service.js';
 import { ChatsAttachmentsService } from './chats-attachments.service.js';
 import { CloudinaryModule } from '../cloudinary/cloudinary.module.js';
 
-
-
 @Module({
   imports: [
     CloudinaryModule,
     ConfigModule,
     AuthModule,
+
     TypeOrmModule.forFeature([
       Message,
       Conversation,

@@ -4,7 +4,7 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 
 @Injectable()
-export class JwtStrategy extends PassportStrategy(Strategy) {
+export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
   constructor(configService: ConfigService) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
@@ -13,12 +13,15 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         'JWT_ACCESS_SECRET',
       ),
     });
+
+    console.log('JWT Strategy initialized');
   }
 
-  async validate(payload: {
-    sub: string;
-    email?: string;
-  }) {
+  async validate(payload: { sub: string; email?: string }) {
+    if (!payload?.sub) {
+      throw new Error('Invalid JWT payload: sub is missing');
+    }
+
     return {
       id: payload.sub,
       sub: payload.sub,
