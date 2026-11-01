@@ -33,6 +33,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth/jwt-auth.guard.js';
 import { ChatsRequestsService } from './chats-requests.service.js';
 import { SendChatRequestDto } from './dtos/send-chat-request.dto.js';
 import { RespondChatRequestDto } from './dtos/respond-request-chat.js';
+import { GetIncomingRequestsDto } from './dtos/getIncomingRequest.dto.js';
 
 interface AuthenticatedRequest extends Request {
   user: {
@@ -127,18 +128,49 @@ export class ChatsController {
     );
   }
 
+
   @Get('requests/incoming')
-  @ApiOperation({ summary: 'Get incoming pending chat requests' })
-  @ApiOkResponse({ description: 'Incoming requests retrieved successfully' })
-  @ApiUnauthorizedResponse({ description: 'Missing or invalid access token' })
-  async getIncomingRequests(@Req() req: AuthenticatedRequest) {
-    const userId = req.user.id ?? req.user.sub;
+  @ApiOperation({
+    summary: 'Get incoming pending chat requests',
+    description:
+      'Retrieves paginated pending chat requests for the authenticated user.',
+  })
+  @ApiOkResponse({
+    description: 'Incoming chat requests retrieved successfully.',
+    schema: {
+      example: {
+        data: [],
+        pagination: {
+          limit: 20,
+          hasMore: false,
+          nextCursor: null,
+        },
+      },
+    },
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Missing or invalid access token.',
+  })
+  @ApiBadRequestResponse({
+    description: 'Invalid pagination parameters or cursor.',
+  })
+  async getIncomingRequests(
+    @Req() req: AuthenticatedRequest,
+    @Query() query: GetIncomingRequestsDto,
+  ) {
+    const userId = req.user?.id ?? req.user?.sub;
 
     if (!userId) {
-      throw new UnauthorizedException();
+      throw new UnauthorizedException(
+        'Authenticated user ID not found.',
+      );
     }
 
-    return this.chatsRequestsService.getIncomingRequests(userId);
+    return this.chatsRequestsService.getIncomingRequests(
+      userId,
+      query.cursor,
+      query.limit,
+    );
   }
 
   @Get('requests/outgoing')
@@ -154,6 +186,37 @@ export class ChatsController {
 
     return this.chatsRequestsService.getOutgoingRequests(userId);
   }
+
+
+  @Get('conversations')
+@ApiOperation({
+  summary: 'Get all conversations for the authenticated user',
+})
+@ApiQuery({ name: 'page', required: false, example: 1 })
+@ApiQuery({ name: 'limit', required: false, example: 20 })
+@ApiOkResponse({
+  description: 'Conversations retrieved successfully',
+})
+@ApiUnauthorizedResponse({
+  description: 'Missing or invalid access token',
+})
+async getConversations(
+  @Req() req: AuthenticatedRequest,
+  @Query('page') page = '1',
+  @Query('limit') limit = '20',
+) {
+  const userId = req.user?.id ?? req.user?.sub;
+
+  if (!userId) {
+    throw new UnauthorizedException();
+  }
+
+  return this.chatsService.getConversations(
+    userId,
+    Number(page),
+    Number(limit),
+  );
+}
 
   @Get('requests/:requestId')
   @ApiOperation({ summary: 'Get a chat request by ID' })

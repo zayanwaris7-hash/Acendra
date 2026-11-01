@@ -11,6 +11,7 @@ import { Message, MessageType } from '../entities/chats.entity.js';
 import { Conversation } from '../entities/conversation.entity.js';
 import { ChatRequest } from '../entities/request.entity.js';
 import { ChatRequestStatus } from '../entities/enum/chat.enum.js';
+import { User } from '../entities/user.entity.js';
 
 
 @Injectable()
@@ -24,8 +25,115 @@ export class ChatsService {
 
     @InjectRepository(ChatRequest)
     private readonly chatRequestRepository: Repository<ChatRequest>,
+
+  @InjectRepository(User)
+  private readonly userRepository: Repository<User>,
   ) {}
 
+
+  /**
+ * Get all conversations belonging to the authenticated user.
+ */
+async getConversations(userId: string, page = 1, limit = 20) {
+  const safePage = Math.max(1, Number(page) || 1);
+  const safeLimit = Math.min(50, Math.max(1, Number(limit) || 20));
+
+  // Find conversations where the logged-in user is a participant.
+  const [conversations, total] =
+    await this.conversationRepository.findAndCount({
+      where: [
+        { userOneId: userId },
+        { userTwoId: userId },
+      ],
+      order: {
+        lastMessageAt: 'DESC',
+        createdAt: 'DESC',
+      },
+      skip: (safePage - 1) * safeLimit,
+      take: safeLimit,
+    });
+
+  const data = await Promise.all(
+    conversations.map(async (conversation) => {
+      // Determine the other participant.
+      const otherUserId =
+        conversation.userOneId === userId
+          ? conversation.userTwoId
+          : conversation.userOneId;
+
+      // Fetch the other user's public information.
+      const otherUser = await this.userRepository.findOne({
+        where: { id: otherUserId },
+        select: {
+          id: true,
+          name: true,
+          username: true,
+          avatarUrl: true,
+        },
+      });
+
+      // Fetch the latest message.
+      const lastMessage = await this.messageRepository.findOne({
+        where: [
+          {
+            senderId: userId,
+            receiverId: otherUserId,
+            deletedAt: IsNull(),
+          },
+          {
+            senderId: otherUserId,
+            receiverId: userId,
+            deletedAt: IsNull(),
+          },
+        ],
+        order: {
+          createdAt: 'DESC',
+        },
+      });
+
+      // Count unread messages received by the logged-in user.
+      const unreadCount = await this.messageRepository.count({
+        where: {
+          senderId: otherUserId,
+          receiverId: userId,
+          isRead: false,
+          deletedAt: IsNull(),
+        },
+      });
+
+      return {
+        id: conversation.id,
+        otherUser,
+        lastMessage: lastMessage
+          ? {
+              id: lastMessage.id,
+              senderId: lastMessage.senderId,
+              receiverId: lastMessage.receiverId,
+              type: lastMessage.type,
+              content: lastMessage.content,
+              attachmentUrl: lastMessage.attachmentUrl,
+              attachmentName: lastMessage.attachmentName,
+              isRead: lastMessage.isRead,
+              createdAt: lastMessage.createdAt,
+            }
+          : null,
+        unreadCount,
+        lastMessageAt: conversation.lastMessageAt,
+        createdAt: conversation.createdAt,
+      };
+    }),
+  );
+
+  return {
+    data,
+    pagination: {
+      page: safePage,
+      limit: safeLimit,
+      total,
+      hasMore: safePage * safeLimit < total,
+    },
+  };
+}
   /**
    * Sort IDs so that the same two users always map
    * to the same conversation record.

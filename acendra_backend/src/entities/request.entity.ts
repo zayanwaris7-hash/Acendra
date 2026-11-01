@@ -1,3 +1,4 @@
+
 import {
   Entity,
   PrimaryGeneratedColumn,
@@ -5,9 +6,12 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   Index,
+  ManyToOne,
+  JoinColumn,
 } from 'typeorm';
-import { ChatRequestStatus } from './enum/chat.enum.js';
 
+import { ChatRequestStatus } from './enum/chat.enum.js';
+import { User } from './user.entity.js';
 
 @Entity('chat_requests')
 @Index(['senderId', 'receiverId'])
@@ -21,6 +25,24 @@ export class ChatRequest {
 
   @Column({ type: 'uuid' })
   receiverId: string;
+
+  @ManyToOne(() => User, {
+    onDelete: 'CASCADE',
+  })
+  @JoinColumn({
+    name: 'senderId',
+    referencedColumnName: 'id',
+  })
+  sender: User;
+
+  @ManyToOne(() => User, {
+    onDelete: 'CASCADE',
+  })
+  @JoinColumn({
+    name: 'receiverId',
+    referencedColumnName: 'id',
+  })
+  receiver: User;
 
   @Column({
     type: 'enum',

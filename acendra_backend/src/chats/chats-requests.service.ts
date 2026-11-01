@@ -1,3 +1,4 @@
+
 import {
   BadRequestException,
   ConflictException,
@@ -9,15 +10,37 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 
 import {
+  Brackets,
   DataSource,
   Repository,
 } from 'typeorm';
-
 
 import { ChatsGateway } from './chats.gateway.js';
 import { ChatRequest } from '../entities/request.entity.js';
 import { Conversation } from '../entities/conversation.entity.js';
 import { ChatRequestStatus } from '../entities/enum/chat.enum.js';
+
+/**
+ * Response type for outgoing chat requests.
+ */
+export interface OutgoingChatRequest {
+  id: string;
+  senderId: string;
+  receiverId: string;
+  message: string | null;
+  status: ChatRequestStatus;
+  respondedAt: Date | null;
+  createdAt: Date;
+}
+
+export interface PaginatedOutgoingRequests {
+  data: OutgoingChatRequest[];
+  pagination: {
+    limit: number;
+    hasMore: boolean;
+    nextCursor: string | null;
+  };
+}
 
 @Injectable()
 export class ChatsRequestsService {
@@ -34,8 +57,8 @@ export class ChatsRequestsService {
   ) {}
 
   /**
-   * Normalize the user IDs so that a conversation between
-   * two users always uses the same userOneId/userTwoId pair.
+   * Normalize user IDs so a conversation always uses
+   * the same userOneId/userTwoId pair.
    */
   private normalizeUserIds(
     firstUserId: string,
@@ -123,7 +146,7 @@ export class ChatsRequestsService {
     const savedRequest =
       await this.chatRequestRepository.save(chatRequest);
 
-    // Notify the receiver if they are connected.
+    // Notify the receiver if connected.
     this.chatsGateway.emitChatRequest(
       receiverId,
       'chat:request:new',
@@ -139,31 +162,145 @@ export class ChatsRequestsService {
   /**
    * Retrieve pending incoming requests.
    */
-  async getIncomingRequests(userId: string) {
-    return this.chatRequestRepository.find({
-      where: {
-        receiverId: userId,
+  async getIncomingRequests(
+    userId: string,
+    cursor?: string,
+    limit = 20,
+  ) {
+    const pageSize = Math.min(Math.max(limit, 1), 50);
+
+    const query = this.chatRequestRepository
+      .createQueryBuilder('request')
+      .leftJoinAndSelect('request.sender', 'sender')
+      .select([
+        'request.id',
+        'request.senderId',
+        'request.receiverId',
+        'request.message',
+        'request.status',
+        'request.respondedAt',
+        'request.createdAt',
+
+        'sender.id',
+        'sender.name',
+        'sender.username',
+        'sender.avatarUrl',
+      ])
+      .where('request.receiverId = :userId', { userId })
+      .andWhere('request.status = :status', {
         status: ChatRequestStatus.PENDING,
+      });
+
+    if (cursor) {
+      query.andWhere(
+        'request.createdAt < :cursor',
+        { cursor },
+      );
+    }
+
+    const requests = await query
+      .orderBy('request.createdAt', 'DESC')
+      .addOrderBy('request.id', 'DESC')
+      .take(pageSize + 1)
+      .getMany();
+
+    const hasMore = requests.length > pageSize;
+    const data = requests.slice(0, pageSize);
+
+    return {
+      data,
+      pagination: {
+        limit: pageSize,
+        hasMore,
+        nextCursor: hasMore
+          ? data[data.length - 1].createdAt
+          : null,
       },
-      order: {
-        createdAt: 'DESC',
-      },
-    });
+    };
   }
 
   /**
    * Retrieve requests sent by the authenticated user.
    */
-  async getOutgoingRequests(userId: string) {
-    return this.chatRequestRepository.find({
+
+async getOutgoingRequests(
+  userId: string,
+  cursor?: string,
+  limit = 20,
+): Promise<PaginatedOutgoingRequests> {
+  const safeLimit = Math.min(Math.max(limit, 1), 50);
+
+  const query = this.chatRequestRepository
+    .createQueryBuilder("request")
+    .leftJoinAndSelect("request.receiver", "receiver")
+    .select([
+      // Request fields
+      "request.id",
+      "request.senderId",
+      "request.receiverId",
+      "request.message",
+      "request.status",
+      "request.respondedAt",
+      "request.createdAt",
+
+      // Receiver fields
+      "receiver.id",
+      "receiver.name",
+      "receiver.email",
+      "receiver.username",
+      "receiver.avatarUrl",
+      "receiver.status",
+    ])
+    .where("request.senderId = :userId", { userId })
+    .orderBy("request.createdAt", "DESC")
+    .addOrderBy("request.id", "DESC")
+    .take(safeLimit + 1);
+
+  if (cursor) {
+    const cursorRequest = await this.chatRequestRepository.findOne({
       where: {
+        id: cursor,
         senderId: userId,
       },
-      order: {
-        createdAt: 'DESC',
+      select: {
+        id: true,
+        createdAt: true,
       },
     });
+
+    if (!cursorRequest) {
+      throw new NotFoundException("Invalid outgoing request cursor");
+    }
+
+    query.andWhere(
+      new Brackets((qb) => {
+        qb.where("request.createdAt < :createdAt", {
+          createdAt: cursorRequest.createdAt,
+        }).orWhere(
+          "request.createdAt = :createdAt AND request.id < :id",
+          {
+            createdAt: cursorRequest.createdAt,
+            id: cursorRequest.id,
+          },
+        );
+      }),
+    );
   }
+
+  const requests = await query.getMany();
+
+  const hasMore = requests.length > safeLimit;
+  const data = requests.slice(0, safeLimit);
+
+  return {
+    data,
+    pagination: {
+      limit: safeLimit,
+      hasMore,
+      nextCursor: hasMore ? data[data.length - 1].id : null,
+    },
+  };
+}
 
   /**
    * Retrieve the status of a particular request.
@@ -198,7 +335,6 @@ export class ChatsRequestsService {
 
   /**
    * Accept or reject an incoming chat request.
-   *
    * Only the receiver can respond.
    */
   async respondToRequest(
@@ -214,7 +350,7 @@ export class ChatsRequestsService {
         const conversationRepository =
           manager.getRepository(Conversation);
 
-        // Lock the row so concurrent responses cannot both succeed.
+        // Lock the row to prevent concurrent responses.
         const request = await requestRepository
           .createQueryBuilder('request')
           .setLock('pessimistic_write')
@@ -279,9 +415,7 @@ export class ChatsRequestsService {
               });
 
             conversation =
-              await conversationRepository.save(
-                conversation,
-              );
+              await conversationRepository.save(conversation);
           }
         }
 
@@ -292,7 +426,7 @@ export class ChatsRequestsService {
       },
     );
 
-    // Notify the original sender after the transaction commits.
+    // Notify the original sender after transaction commits.
     this.chatsGateway.emitChatRequest(
       result.request.senderId,
       'chat:request:updated',

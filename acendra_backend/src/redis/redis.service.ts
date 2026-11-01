@@ -83,6 +83,19 @@ export class RedisService implements OnModuleDestroy {
   }
 
   /**
+ * Increment a Redis counter.
+ * Used for invalidating cached user-list versions.
+ */
+async increment(key: string): Promise<number> {
+  this.validateKey(key);
+
+  try {
+    return await this.redis.incr(key);
+  } catch (error) {
+    this.handleRedisError('INCR', key, error);
+  }
+}
+  /**
    * Retrieve a typed value.
    * Returns null when the key does not exist.
    */

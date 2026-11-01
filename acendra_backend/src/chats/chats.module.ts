@@ -13,6 +13,7 @@ import { AuthModule } from '../auth/auth.module.js';
 import { ChatsRequestsService } from './chats-requests.service.js';
 import { ChatsAttachmentsService } from './chats-attachments.service.js';
 import { CloudinaryModule } from '../cloudinary/cloudinary.module.js';
+import { User } from '../entities/user.entity.js';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { CloudinaryModule } from '../cloudinary/cloudinary.module.js';
       Message,
       Conversation,
       ChatRequest,
+      User,
     ]),
 
     JwtModule.registerAsync({

@@ -319,53 +319,48 @@ export class ChatsGateway
   /**
    * Notify the recipient about typing status.
    */
-  @SubscribeMessage('chat:typing')
-  async typing(
-    @ConnectedSocket() client: AuthenticatedSocket,
-    @MessageBody()
-    payload: {
-      receiverId: string;
-      isTyping: boolean;
-    },
-  ) {
-    this.logger.debug(
-      `[EVENT RECEIVED] chat:typing socketId=${client.id}`,
+
+@SubscribeMessage('chat:typing')
+async handleTyping(
+  @ConnectedSocket() client: AuthenticatedSocket,
+  @MessageBody()
+  data: {
+    receiverId: string;
+    isTyping: boolean;
+  },
+) {
+  try {
+    const senderId = this.getUserId(client);
+
+    if (!data?.receiverId || senderId === data.receiverId) {
+      return;
+    }
+
+    if (typeof data.isTyping !== 'boolean') {
+      throw new Error('isTyping must be a boolean.');
+    }
+
+    await this.chatsService.getAuthorizedConversation(
+      senderId,
+      data.receiverId,
     );
 
-    try {
-      const senderId = this.getUserId(client);
+    await this.chatsService.assertChatAccepted(
+      senderId,
+      data.receiverId,
+    );
 
-      const conversation =
-        await this.chatsService.getAuthorizedConversation(
-          senderId,
-          payload.receiverId,
-        );
-
-      await this.chatsService.assertChatAccepted(
+    this.server
+      .to(this.getUserRoom(data.receiverId))
+      .emit('chat:typing', {
         senderId,
-        payload.receiverId,
-      );
-
-      const eventData = {
-        conversationId: conversation.id,
-        userId: senderId,
-        isTyping: Boolean(payload.isTyping),
-      };
-
-      this.server
-        .to(this.getUserRoom(payload.receiverId))
-        .emit('chat:typing', eventData);
-
-      this.logger.log(
-        `[TYPING EMITTED] senderId=${senderId} receiverId=${payload.receiverId} isTyping=${eventData.isTyping}`,
-      );
-
-      return { success: true };
-    } catch (error) {
-      this.emitError(client, error);
-      return { success: false };
-    }
+        isTyping: data.isTyping,
+      });
+  } catch (error) {
+    this.emitError(client, error);
   }
+}
+
 
   /**
    * Mark received messages as read and notify the sender.
